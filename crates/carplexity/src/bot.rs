@@ -1,0 +1,1 @@
+// Idea: Encourage treating the arena as symmetric (if it actually is) by evaluating the neural net output for the current state and the mirrored state. Add a penalty if the two outputs are different.

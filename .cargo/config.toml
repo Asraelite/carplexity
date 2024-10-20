@@ -1,0 +1,8 @@
+[build]
+rustflags = [
+	"-C",
+	"link-arg=-Wl,--default-symver",
+	"-C",
+	"link-arg=-undefined",
+]
+target-dir = "target"
