@@ -13,8 +13,8 @@ pub struct PhysicsPlugin;
 impl Plugin for PhysicsPlugin {
 	fn build(&self, app: &mut App) {
 		app.add_systems(FixedUpdate, update_time_warp)
-			.add_systems(FixedUpdate, run_arena_physics.after(update_time_warp))
-			.add_systems(Update, apply_movement_state);
+			.add_systems(FixedUpdate, run_room_physics.after(update_time_warp))
+			.add_systems(Update, update_transforms.after(run_room_physics));
 	}
 }
 
@@ -31,29 +31,39 @@ pub struct PhysicsBundle {
 	pub authority: Authority,
 }
 
-/// Whether the physics state is being updated locally or received from the network, i.e. single player or online multiplayer.
+/// The source of truth for the physics state.
 #[derive(Component)]
 pub enum Authority {
+	/// Normal, offline play.
 	Local,
+	/// Connected to a game server.
 	Remote,
+	/// Watching a replay.
+	Replay,
 }
 
 #[derive(Component)]
-pub struct MovementState {
+pub struct PhysicalState {
 	pub position: Vec3,
 	pub velocity: Vec3,
 	pub rotation: Quat,
 	pub angular_velocity: Vec3,
 }
 
+#[derive(Component)]
+pub struct PhysicalStateHistory {
+	pub states: Vec<(u64, PhysicalState)>,
+}
+
+#[derive(Component)]
+pub struct PositionHistory {
+	pub positions: Vec<Vec3>,
+}
+
 pub trait PhysicsEngine: Send + Sync {
 	// type State: Send + Sync + Clone;
 
 	fn update(&mut self, delta_time: f32) -> Result<(), String>;
-
-	// TODO: Is a more stateless/functional design possible?
-	// fn add_collider(&mut self, entity: Entity, collider: Collider);
-	// fn remove_collider(&mut self, entity: Entity);
 }
 
 #[derive(Component)]
@@ -81,8 +91,8 @@ pub struct TimeWarp {
 	pub time_dilation: f32,
 }
 
-impl TimeWarp {
-	fn new() -> Self {
+impl Default for TimeWarp {
+	fn default() -> Self {
 		Self {
 			current_tick: 0,
 			target_lag: 0.0,
@@ -102,7 +112,7 @@ fn update_time_warp(mut time_warp: Query<(&mut TimeWarp, &Authority)>) {
 		time_warp.current_tick += 1;
 
 		match authority {
-			Authority::Local => {
+			Authority::Local | Authority::Replay => {
 				time_warp.target_lag = 0.0;
 				time_warp.time_dilation = 1.0;
 			}
@@ -113,29 +123,41 @@ fn update_time_warp(mut time_warp: Query<(&mut TimeWarp, &Authority)>) {
 	}
 }
 
-fn apply_movement_state(
+fn update_transforms(
 	fixed_time: Res<Time<Fixed>>,
-	mut state_query: Query<(Option<&Parent>, &mut Transform, &MovementState)>,
-	physics_query: Query<(&Room, &Physics, &TimeWarp)>,
+	mut physical_state_query: Query<(
+		&PhysicalState,
+		&PhysicalStateHistory,
+		Option<&Parent>,
+		&mut Transform,
+	)>,
+	room_query: Query<(&Room, &Physics, &TimeWarp, &Authority)>,
 ) {
-	for (parent, mut transform, movement_state) in &mut state_query {
+	for (physical_state, physical_state_history, parent, mut transform) in &mut physical_state_query
+	{
+		// TODO: Use interpolation instead of extrapolation if the authority is replay.
 		let ticks_ahead = fixed_time.overstep_fraction();
-		let time_dilation = match parent.and_then(|parent| physics_query.get(parent.get()).ok()) {
-			Some((_, _, time_warp)) => time_warp.time_dilation,
-			None => 1.0,
-		};
+		let time_dilation = parent
+			.and_then(|parent| room_query.get(parent.get()).ok())
+			.map_or(1.0, |(_, _, time_warp, _)| time_warp.time_dilation);
 		let delta_seconds = fixed_time.delta_seconds() * time_dilation;
 
-		let future_position = movement_state.position + movement_state.velocity * delta_seconds;
-		transform.translation = movement_state.position.lerp(future_position, ticks_ahead);
+		let future_position = physical_state.position + physical_state.velocity * delta_seconds;
+		transform.translation = physical_state.position.lerp(future_position, ticks_ahead);
 
-		let future_rotation = movement_state.rotation
+		let future_rotation = physical_state.rotation
 			* Quat::from_axis_angle(
-				movement_state.angular_velocity.normalize(),
-				movement_state.angular_velocity.length() * delta_seconds,
+				physical_state.angular_velocity.normalize(),
+				physical_state.angular_velocity.length() * delta_seconds,
 			);
-		transform.rotation = movement_state.rotation.slerp(future_rotation, ticks_ahead);
+		transform.rotation = physical_state.rotation.slerp(future_rotation, ticks_ahead);
 	}
+}
+
+fn run_room_physics(
+	fixed_time: Res<Time<Fixed>>,
+	mut room_query: Query<(&mut Physics, &Room, &TimeWarp, &Authority)>,
+) {
 }
 
 // fn retroactively_apply_inputs(
@@ -158,15 +180,3 @@ fn apply_movement_state(
 // 		}
 // 	}
 // }
-
-fn run_arena_physics(
-	mut arena_physics: Query<(&mut Physics, &mut Room, &TimeWarp)>,
-	colliders: Query<Entity, With<Collider>>,
-) {
-	arena_physics
-		.par_iter_mut()
-		.for_each(|(mut physics, mut arena, time_warp)| {
-			let warped_tick_rate = SECONDS_PER_TICK * time_warp.time_dilation;
-			physics.engine.update(warped_tick_rate);
-		});
-}

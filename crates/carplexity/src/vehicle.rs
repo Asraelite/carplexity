@@ -4,6 +4,7 @@ use control::VehicleControl;
 use crate::physics::Collider;
 
 pub mod control;
+mod energy;
 
 #[derive(Resource)]
 pub struct VehicleSpawner {

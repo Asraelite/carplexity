@@ -24,6 +24,7 @@ mod id;
 mod ident_server;
 mod input;
 mod network;
+mod object;
 mod package;
 mod physics;
 mod player;
@@ -32,6 +33,7 @@ mod render;
 mod room;
 mod server;
 mod setup;
+mod texture;
 mod vehicle;
 mod version;
 mod wasm;
@@ -62,7 +64,7 @@ fn main() {
 		}
 		Some(CliSubcommand::IdentServer(args)) => {
 			ident_server::run(args);
-		},
+		}
 		_ => {
 			run_client();
 		}
